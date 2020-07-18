@@ -22,7 +22,6 @@ import (
 	"os"
 	"runtime"
 	"syscall"
-	"time"
 
 	"github.com/edwarnicke/serialize"
 	"github.com/pkg/errors"
@@ -37,6 +36,7 @@ type SyscallConn interface {
 type FDSender interface {
 	SendFD(fd uintptr) <-chan error
 	SendFile(file SyscallConn) <-chan error
+	SendFilename(filename string) <-chan error
 }
 
 // FDRecver - capable of Recving an fd by (dev,ino)
@@ -68,9 +68,32 @@ func wrapConn(conn net.Conn) net.Conn {
 	if !ok {
 		return conn
 	}
-	return &wrappedConn{
+	conn = &wrappedConn{
 		Conn: conn,
 	}
+	runtime.SetFinalizer(conn, func(conn net.Conn) {
+		_ = conn.Close()
+	})
+	return conn
+}
+
+func (w *wrappedConn) Close() error {
+	err := w.Conn.Close()
+	w.recvExecutor.AsyncExec(func() {
+		for k, fds := range w.unclaimedFD {
+			for _, fd := range fds {
+				_ = syscall.Close(int(fd))
+			}
+			delete(w.unclaimedFD, k)
+		}
+		for k, recvChs := range w.recvFDChans {
+			for _, recvCh := range recvChs {
+				close(recvCh)
+			}
+			delete(w.recvFDChans, k)
+		}
+	})
+	return err
 }
 
 func (w *wrappedConn) Write(b []byte) (int, error) {
@@ -135,6 +158,27 @@ func (w *wrappedConn) SendFile(file SyscallConn) <-chan error {
 		errCh <- err
 		close(errCh)
 	}
+	return errCh
+}
+
+func (w *wrappedConn) SendFilename(filename string) <-chan error {
+	errCh := make(chan error, 1)
+	file, err := os.Open(filename) // #nosec
+	if err != nil {
+		errCh <- err
+		close(errCh)
+		return errCh
+	}
+	go func(errChIn <-chan error, errChOut chan<- error) {
+		for err := range errChIn {
+			errChOut <- err
+		}
+		err := file.Close()
+		if err != nil {
+			errChOut <- err
+		}
+		close(errChOut)
+	}(w.SendFile(file), errCh)
 	return errCh
 }
 
@@ -216,17 +260,6 @@ func (w *wrappedConn) Read(b []byte) (n int, err error) {
 					return
 				}
 				w.unclaimedFD[key] = append(w.unclaimedFD[key], uintptr(fd))
-				go func(fd int) {
-					<-time.After(time.Second)
-					w.recvExecutor.AsyncExec(func() {
-						for i, f := range w.unclaimedFD[key] {
-							if uintptr(fd) == f {
-								w.unclaimedFD[key] = append(w.unclaimedFD[key][:i], w.unclaimedFD[key][i+1:]...)
-								_ = os.NewFile(f, "").Close()
-							}
-						}
-					})
-				}(fd)
 			}
 		}
 	})

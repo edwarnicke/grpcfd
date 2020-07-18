@@ -24,40 +24,57 @@ import (
 )
 
 type wrapTransportCredentials struct {
+	presenders []func(FDSender)
 	credentials.TransportCredentials
 }
 
 // TransportCredentials - transport credentials that will, in addition to applying cred, cause peer.Addr to supply
 // the FDSender and FDRecver interfaces
-func TransportCredentials(cred credentials.TransportCredentials) credentials.TransportCredentials {
+func TransportCredentials(cred credentials.TransportCredentials, presenders ...func(FDSender)) credentials.TransportCredentials {
 	return &wrapTransportCredentials{
 		TransportCredentials: cred,
+		presenders:           presenders,
 	}
 }
 
 func (c *wrapTransportCredentials) ClientHandshake(ctx context.Context, authority string, rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	rawConn = wrapConn(rawConn)
+	conn := wrapConn(rawConn)
+	var authInfo credentials.AuthInfo
+	var err error
 	if c.TransportCredentials != nil {
-		return c.TransportCredentials.ClientHandshake(ctx, authority, rawConn)
+		conn, authInfo, err = c.TransportCredentials.ClientHandshake(ctx, authority, conn)
 	}
-	return rawConn, nil, nil
+	if fdsender, ok := conn.(FDSender); ok {
+		for _, presender := range c.presenders {
+			presender(fdsender)
+		}
+	}
+	return conn, authInfo, err
 }
 
 func (c *wrapTransportCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	rawConn = wrapConn(rawConn)
+	conn := wrapConn(rawConn)
+	var authInfo credentials.AuthInfo
+	var err error
 	if c.TransportCredentials != nil {
-		return c.TransportCredentials.ServerHandshake(rawConn)
+		conn, authInfo, err = c.TransportCredentials.ServerHandshake(conn)
 	}
-	return rawConn, nil, nil
+	if fdsender, ok := conn.(FDSender); ok {
+		for _, presender := range c.presenders {
+			presender(fdsender)
+		}
+	}
+	return conn, authInfo, err
 }
 
 func (c *wrapTransportCredentials) Clone() credentials.TransportCredentials {
 	if c.TransportCredentials != nil {
 		return &wrapTransportCredentials{
 			TransportCredentials: c.TransportCredentials.Clone(),
+			presenders:           c.presenders,
 		}
 	}
-	return &wrapTransportCredentials{}
+	return &wrapTransportCredentials{presenders: c.presenders}
 }
 
 func (c *wrapTransportCredentials) Info() credentials.ProtocolInfo {
