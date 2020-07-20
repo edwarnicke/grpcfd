@@ -25,6 +25,7 @@ import (
 
 	"github.com/edwarnicke/serialize"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 )
 
 // SyscallConn - having the SyscallConn method to access syscall.RawConn
@@ -43,6 +44,7 @@ type FDSender interface {
 type FDRecver interface {
 	RecvFD(dev, inode uint64) <-chan uintptr
 	RecvFile(dev, ino uint64) <-chan *os.File
+	RecvFileByURL(urlStr string) (<-chan *os.File, error)
 }
 
 type inodeKey struct {
@@ -57,7 +59,7 @@ type wrappedConn struct {
 	sendExecutor serialize.Executor
 
 	recvFDChans  map[inodeKey][]chan uintptr
-	unclaimedFD  map[inodeKey][]uintptr
+	recvedFDs    map[inodeKey]uintptr
 	recvExecutor serialize.Executor
 }
 
@@ -69,7 +71,9 @@ func wrapConn(conn net.Conn) net.Conn {
 		return conn
 	}
 	conn = &wrappedConn{
-		Conn: conn,
+		Conn:        conn,
+		recvFDChans: make(map[inodeKey][]chan uintptr),
+		recvedFDs:   make(map[inodeKey]uintptr),
 	}
 	runtime.SetFinalizer(conn, func(conn net.Conn) {
 		_ = conn.Close()
@@ -80,11 +84,9 @@ func wrapConn(conn net.Conn) net.Conn {
 func (w *wrappedConn) Close() error {
 	err := w.Conn.Close()
 	w.recvExecutor.AsyncExec(func() {
-		for k, fds := range w.unclaimedFD {
-			for _, fd := range fds {
-				_ = syscall.Close(int(fd))
-			}
-			delete(w.unclaimedFD, k)
+		for k, fd := range w.recvedFDs {
+			_ = syscall.Close(int(fd))
+			delete(w.recvedFDs, k)
 		}
 		for k, recvChs := range w.recvFDChans {
 			for _, recvCh := range recvChs {
@@ -163,7 +165,7 @@ func (w *wrappedConn) SendFile(file SyscallConn) <-chan error {
 
 func (w *wrappedConn) SendFilename(filename string) <-chan error {
 	errCh := make(chan error, 1)
-	file, err := os.Open(filename) // #nosec
+	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
 	if err != nil {
 		errCh <- err
 		close(errCh)
@@ -195,27 +197,36 @@ func (w *wrappedConn) String() string {
 }
 
 func (w *wrappedConn) RecvFD(dev, ino uint64) <-chan uintptr {
-	fdCh := make(chan uintptr)
+	fdCh := make(chan uintptr, 1)
 	w.recvExecutor.AsyncExec(func() {
 		key := inodeKey{
 			dev: dev,
 			ino: ino,
 		}
-		if len(w.unclaimedFD[key]) > 0 {
-			fdCh <- w.unclaimedFD[key][0]
-			w.unclaimedFD[key] = w.unclaimedFD[key][1:]
-			if len(w.unclaimedFD[key]) == 0 {
-				delete(w.unclaimedFD, key)
+		// If we have the fd for this (dev,ino) already
+		if fd, ok := w.recvedFDs[key]; ok {
+			// Copy it
+			var errno syscall.Errno
+			fd, _, errno = syscall.Syscall(syscall.SYS_FCNTL, fd, uintptr(syscall.F_DUPFD), 0)
+			if errno != 0 {
+				// TODO - this is terrible error handling
+				close(fdCh)
+				return
 			}
+			// Send it to the requestor
+			fdCh <- fd
+			// Close the channel
+			close(fdCh)
 			return
 		}
+		// Otherwise queue the requestor up to receive the fd if we ever get it
 		w.recvFDChans[key] = append(w.recvFDChans[key], fdCh)
 	})
 	return fdCh
 }
 
 func (w *wrappedConn) RecvFile(dev, ino uint64) <-chan *os.File {
-	fileCh := make(chan *os.File)
+	fileCh := make(chan *os.File, 1)
 	go func(fdCh <-chan uintptr, fileCh chan<- *os.File) {
 		for fd := range fdCh {
 			if runtime.GOOS == "linux" {
@@ -229,13 +240,24 @@ func (w *wrappedConn) RecvFile(dev, ino uint64) <-chan *os.File {
 	return fileCh
 }
 
+func (w *wrappedConn) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
+	dev, ino, err := URLStringToDevIno(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	return w.RecvFile(dev, ino), nil
+}
+
 func (w *wrappedConn) Read(b []byte) (n int, err error) {
 	oob := make([]byte, syscall.CmsgSpace(4))
 	var oobn int
 	n, oobn, _, _, err = w.Conn.(interface {
 		ReadMsgUnix(b, oob []byte) (n, oobn, flags int, addr *net.UnixAddr, err error)
 	}).ReadMsgUnix(b, oob)
+
+	// Go async for updating info
 	w.recvExecutor.AsyncExec(func() {
+		// We got oob info
 		if oobn != 0 {
 			msgs, parseCtlErr := syscall.ParseSocketControlMessage(oob)
 			if parseCtlErr != nil {
@@ -247,19 +269,39 @@ func (w *wrappedConn) Read(b []byte) (n int, err error) {
 			}
 			for _, fd := range fds {
 				var stat syscall.Stat_t
-				err = syscall.Fstat(fd, &stat)
-				if err != nil {
+
+				// Get the (dev,ino) for the fd
+				fstatErr := syscall.Fstat(fd, &stat)
+				if fstatErr != nil {
 					continue
 				}
 				key := inodeKey{
 					dev: uint64(stat.Dev),
 					ino: stat.Ino,
 				}
-				for _, fdCh := range w.recvFDChans[key] {
-					fdCh <- uintptr(fd)
-					return
+
+				// If we have one already... close the new one
+				if _, ok := w.recvedFDs[key]; ok {
+					_ = syscall.Close(fd)
+					continue
 				}
-				w.unclaimedFD[key] = append(w.unclaimedFD[key], uintptr(fd))
+
+				// If its new store it in our map of recvedFDs
+				w.recvedFDs[key] = uintptr(fd)
+
+				// Iterate through any waiting receivers
+				for _, fdCh := range w.recvFDChans[key] {
+					// Copy the fd.  Always copy the fd.  Who knows what the recipient might choose to do with it.
+					fd, _, errno := syscall.Syscall(syscall.SYS_FCNTL, w.recvedFDs[key], uintptr(syscall.F_DUPFD), 0)
+					if errno != 0 {
+						// TODO - this is terrible error handling
+						close(fdCh)
+						continue
+					}
+					fdCh <- fd
+					close(fdCh)
+				}
+				delete(w.recvFDChans, key)
 			}
 		}
 	})

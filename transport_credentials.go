@@ -39,12 +39,13 @@ func TransportCredentials(cred credentials.TransportCredentials, presenders ...f
 
 func (c *wrapTransportCredentials) ClientHandshake(ctx context.Context, authority string, rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
 	conn := wrapConn(rawConn)
+	fdsender, ok := conn.(FDSender)
 	var authInfo credentials.AuthInfo
 	var err error
 	if c.TransportCredentials != nil {
 		conn, authInfo, err = c.TransportCredentials.ClientHandshake(ctx, authority, conn)
 	}
-	if fdsender, ok := conn.(FDSender); ok {
+	if ok {
 		for _, presender := range c.presenders {
 			presender(fdsender)
 		}
