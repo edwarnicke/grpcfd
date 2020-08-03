@@ -25,7 +25,6 @@ import (
 
 	"github.com/edwarnicke/serialize"
 	"github.com/pkg/errors"
-	"golang.org/x/sys/unix"
 )
 
 // SyscallConn - having the SyscallConn method to access syscall.RawConn
@@ -160,27 +159,6 @@ func (w *wrappedConn) SendFile(file SyscallConn) <-chan error {
 		errCh <- err
 		close(errCh)
 	}
-	return errCh
-}
-
-func (w *wrappedConn) SendFilename(filename string) <-chan error {
-	errCh := make(chan error, 1)
-	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
-	if err != nil {
-		errCh <- err
-		close(errCh)
-		return errCh
-	}
-	go func(errChIn <-chan error, errChOut chan<- error) {
-		for err := range errChIn {
-			errChOut <- err
-		}
-		err := file.Close()
-		if err != nil {
-			errChOut <- err
-		}
-		close(errChOut)
-	}(w.SendFile(file), errCh)
 	return errCh
 }
 
