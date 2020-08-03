@@ -24,16 +24,16 @@ import (
 )
 
 type wrapTransportCredentials struct {
-	presenders []func(FDSender)
+	capturers []func(FDSender)
 	credentials.TransportCredentials
 }
 
 // TransportCredentials - transport credentials that will, in addition to applying cred, cause peer.Addr to supply
 // the FDSender and FDRecver interfaces
-func TransportCredentials(cred credentials.TransportCredentials, presenders ...func(FDSender)) credentials.TransportCredentials {
+func TransportCredentials(cred credentials.TransportCredentials, capturers ...func(FDSender)) credentials.TransportCredentials {
 	return &wrapTransportCredentials{
 		TransportCredentials: cred,
-		presenders:           presenders,
+		capturers:            capturers,
 	}
 }
 
@@ -46,8 +46,8 @@ func (c *wrapTransportCredentials) ClientHandshake(ctx context.Context, authorit
 		conn, authInfo, err = c.TransportCredentials.ClientHandshake(ctx, authority, conn)
 	}
 	if ok {
-		for _, presender := range c.presenders {
-			presender(fdsender)
+		for _, capturer := range c.capturers {
+			capturer(fdsender)
 		}
 	}
 	return conn, authInfo, err
@@ -61,7 +61,7 @@ func (c *wrapTransportCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, 
 		conn, authInfo, err = c.TransportCredentials.ServerHandshake(conn)
 	}
 	if fdsender, ok := conn.(FDSender); ok {
-		for _, presender := range c.presenders {
+		for _, presender := range c.capturers {
 			presender(fdsender)
 		}
 	}
@@ -72,10 +72,10 @@ func (c *wrapTransportCredentials) Clone() credentials.TransportCredentials {
 	if c.TransportCredentials != nil {
 		return &wrapTransportCredentials{
 			TransportCredentials: c.TransportCredentials.Clone(),
-			presenders:           c.presenders,
+			capturers:            c.capturers,
 		}
 	}
-	return &wrapTransportCredentials{presenders: c.presenders}
+	return &wrapTransportCredentials{capturers: c.capturers}
 }
 
 func (c *wrapTransportCredentials) Info() credentials.ProtocolInfo {
