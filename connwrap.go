@@ -203,6 +203,14 @@ func (w *wrappedConn) RecvFD(dev, ino uint64) <-chan uintptr {
 	return fdCh
 }
 
+func (w *wrappedConn) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
+	dev, ino, err := URLStringToDevIno(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	return w.RecvFD(dev, ino), nil
+}
+
 func (w *wrappedConn) RecvFile(dev, ino uint64) <-chan *os.File {
 	fileCh := make(chan *os.File, 1)
 	go func(fdCh <-chan uintptr, fileCh chan<- *os.File) {
