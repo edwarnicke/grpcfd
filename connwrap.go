@@ -44,6 +44,7 @@ type FDRecver interface {
 	RecvFD(dev, inode uint64) <-chan uintptr
 	RecvFile(dev, ino uint64) <-chan *os.File
 	RecvFileByURL(urlStr string) (<-chan *os.File, error)
+	RecvFDByURL(urlStr string) (<-chan uintptr, error)
 }
 
 type inodeKey struct {
