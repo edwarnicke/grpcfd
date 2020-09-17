@@ -24,23 +24,35 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (w *grpcFDConn) SendFilename(filename string) <-chan error {
-	errCh := make(chan error, 1)
+func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
+	out := make(chan error, 1)
+	var transceiver FDTransceiver
 	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
 	if err != nil {
-		errCh <- err
-		close(errCh)
-		return errCh
+		out <- err
+		close(out)
+		return out
 	}
-	go func(errChIn <-chan error, errChOut chan<- error) {
-		for err := range errChIn {
-			errChOut <- err
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
 		}
-		err := file.Close()
-		if err != nil {
-			errChOut <- err
-		}
-		close(errChOut)
-	}(w.SendFile(file), errCh)
-	return errCh
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go func(errChIn <-chan error, errChOut chan<- error) {
+				for err := range errChIn {
+					errChOut <- err
+				}
+				err := file.Close()
+				if err != nil {
+					errChOut <- err
+				}
+				close(errChOut)
+			}(transceiver.SendFile(file), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.SendFile(file)
+	}
+	return out
 }

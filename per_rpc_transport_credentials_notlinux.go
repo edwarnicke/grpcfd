@@ -18,29 +18,39 @@
 
 package grpcfd
 
-import (
-	"os"
-)
+import "os"
 
-func (w *grpcFDConn) SendFilename(filename string) <-chan error {
-	errCh := make(chan error, 1)
+func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
+	out := make(chan error, 1)
+	var transceiver FDTransceiver
 	// Note: this will fail in most cases for 'unopenable' files (like unix file sockets).  See use of O_PATH in connwrap_linux.go for
 	// the trick that makes this work in Linux
 	file, err := os.Open(filename) // #nosec
 	if err != nil {
-		errCh <- err
-		close(errCh)
-		return errCh
+		out <- err
+		close(out)
+		return out
 	}
-	go func(errChIn <-chan error, errChOut chan<- error) {
-		for err := range errChIn {
-			errChOut <- err
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
 		}
-		err := file.Close()
-		if err != nil {
-			errChOut <- err
-		}
-		close(errChOut)
-	}(w.SendFile(file), errCh)
-	return errCh
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go func(errChIn <-chan error, errChOut chan<- error) {
+				for err := range errChIn {
+					errChOut <- err
+				}
+				err := file.Close()
+				if err != nil {
+					errChOut <- err
+				}
+				close(errChOut)
+			}(transceiver.SendFile(file), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.SendFile(file)
+	}
+	return out
 }

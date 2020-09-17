@@ -38,7 +38,7 @@ func TransportCredentials(cred credentials.TransportCredentials, capturers ...fu
 }
 
 func (c *wrapTransportCredentials) ClientHandshake(ctx context.Context, authority string, rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	conn := wrapConn(rawConn)
+	conn := wrapGrpcFDConn(rawConn)
 	fdsender, ok := conn.(FDSender)
 	var authInfo credentials.AuthInfo
 	var err error
@@ -54,7 +54,7 @@ func (c *wrapTransportCredentials) ClientHandshake(ctx context.Context, authorit
 }
 
 func (c *wrapTransportCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	conn := wrapConn(rawConn)
+	conn := wrapGrpcFDConn(rawConn)
 	var authInfo credentials.AuthInfo
 	var err error
 	if c.TransportCredentials != nil {

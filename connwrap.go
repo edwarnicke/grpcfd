@@ -17,6 +17,7 @@
 package grpcfd
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/edwarnicke/serialize"
 	"github.com/pkg/errors"
+	"google.golang.org/grpc/peer"
 )
 
 // SyscallConn - having the SyscallConn method to access syscall.RawConn
@@ -47,12 +49,18 @@ type FDRecver interface {
 	RecvFDByURL(urlStr string) (<-chan uintptr, error)
 }
 
+// FDTransceiver - combination of FDSender  and FDRecver
+type FDTransceiver interface {
+	FDSender
+	FDRecver
+}
+
 type inodeKey struct {
 	dev uint64
 	ino uint64
 }
 
-type wrappedConn struct {
+type grpcFDConn struct {
 	net.Conn
 
 	sendFD       []func(b []byte) (n int, err error)
@@ -63,14 +71,14 @@ type wrappedConn struct {
 	recvExecutor serialize.Executor
 }
 
-func wrapConn(conn net.Conn) net.Conn {
+func wrapGrpcFDConn(conn net.Conn) net.Conn {
 	_, ok := conn.(interface {
 		WriteMsgUnix(b, oob []byte, addr *net.UnixAddr) (n, oobn int, err error)
 	})
 	if !ok {
 		return conn
 	}
-	conn = &wrappedConn{
+	conn = &grpcFDConn{
 		Conn:        conn,
 		recvFDChans: make(map[inodeKey][]chan uintptr),
 		recvedFDs:   make(map[inodeKey]uintptr),
@@ -81,7 +89,7 @@ func wrapConn(conn net.Conn) net.Conn {
 	return conn
 }
 
-func (w *wrappedConn) Close() error {
+func (w *grpcFDConn) Close() error {
 	err := w.Conn.Close()
 	w.recvExecutor.AsyncExec(func() {
 		for k, fd := range w.recvedFDs {
@@ -98,7 +106,7 @@ func (w *wrappedConn) Close() error {
 	return err
 }
 
-func (w *wrappedConn) Write(b []byte) (int, error) {
+func (w *grpcFDConn) Write(b []byte) (int, error) {
 	var write func(b []byte) (int, error)
 	<-w.sendExecutor.AsyncExec(func() {
 		if len(w.sendFD) > 0 {
@@ -116,7 +124,7 @@ func (w *wrappedConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-func (w *wrappedConn) SendFD(fd uintptr) <-chan error {
+func (w *grpcFDConn) SendFD(fd uintptr) <-chan error {
 	errCh := make(chan error, 1)
 	w.sendExecutor.AsyncExec(func() {
 		w.sendFD = append(w.sendFD, func(b []byte) (n int, err error) {
@@ -133,7 +141,7 @@ func (w *wrappedConn) SendFD(fd uintptr) <-chan error {
 	return errCh
 }
 
-func (w *wrappedConn) SendFile(file SyscallConn) <-chan error {
+func (w *grpcFDConn) SendFile(file SyscallConn) <-chan error {
 	errCh := make(chan error, 1)
 	raw, err := file.SyscallConn()
 	if err != nil {
@@ -163,19 +171,19 @@ func (w *wrappedConn) SendFile(file SyscallConn) <-chan error {
 	return errCh
 }
 
-func (w *wrappedConn) RemoteAddr() net.Addr {
+func (w *grpcFDConn) RemoteAddr() net.Addr {
 	return w
 }
 
-func (w *wrappedConn) Network() string {
+func (w *grpcFDConn) Network() string {
 	return w.Conn.RemoteAddr().Network()
 }
 
-func (w *wrappedConn) String() string {
+func (w *grpcFDConn) String() string {
 	return w.Conn.RemoteAddr().String()
 }
 
-func (w *wrappedConn) RecvFD(dev, ino uint64) <-chan uintptr {
+func (w *grpcFDConn) RecvFD(dev, ino uint64) <-chan uintptr {
 	fdCh := make(chan uintptr, 1)
 	w.recvExecutor.AsyncExec(func() {
 		key := inodeKey{
@@ -204,7 +212,7 @@ func (w *wrappedConn) RecvFD(dev, ino uint64) <-chan uintptr {
 	return fdCh
 }
 
-func (w *wrappedConn) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
+func (w *grpcFDConn) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
 	dev, ino, err := URLStringToDevIno(urlStr)
 	if err != nil {
 		return nil, err
@@ -212,7 +220,7 @@ func (w *wrappedConn) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
 	return w.RecvFD(dev, ino), nil
 }
 
-func (w *wrappedConn) RecvFile(dev, ino uint64) <-chan *os.File {
+func (w *grpcFDConn) RecvFile(dev, ino uint64) <-chan *os.File {
 	fileCh := make(chan *os.File, 1)
 	go func(fdCh <-chan uintptr, fileCh chan<- *os.File) {
 		for fd := range fdCh {
@@ -227,7 +235,7 @@ func (w *wrappedConn) RecvFile(dev, ino uint64) <-chan *os.File {
 	return fileCh
 }
 
-func (w *wrappedConn) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
+func (w *grpcFDConn) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
 	dev, ino, err := URLStringToDevIno(urlStr)
 	if err != nil {
 		return nil, err
@@ -235,7 +243,7 @@ func (w *wrappedConn) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
 	return w.RecvFile(dev, ino), nil
 }
 
-func (w *wrappedConn) Read(b []byte) (n int, err error) {
+func (w *grpcFDConn) Read(b []byte) (n int, err error) {
 	oob := make([]byte, syscall.CmsgSpace(4))
 	var oobn int
 	n, oobn, _, _, err = w.Conn.(interface {
@@ -296,4 +304,21 @@ func (w *wrappedConn) Read(b []byte) (n int, err error) {
 		return 0, err
 	}
 	return n, err
+}
+
+// FromPeer - return grpcfd.FDTransceiver from peer.Peer
+//            ok is true of successful, false otherwise
+func FromPeer(p *peer.Peer) (transceiver FDTransceiver, ok bool) {
+	transceiver, ok = p.Addr.(FDTransceiver)
+	return transceiver, ok
+}
+
+// FromContext - return grpcfd.FDTransceiver from context.Context
+//               ok is true of successful, false otherwise
+func FromContext(ctx context.Context) (transceiver FDTransceiver, ok bool) {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return nil, false
+	}
+	return FromPeer(p)
 }
