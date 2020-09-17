@@ -18,54 +18,33 @@ package grpcfd
 
 import (
 	context "context"
+	"os"
 
+	"github.com/edwarnicke/serialize"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/peer"
 )
 
 type wrapPerRPCCredentials struct {
 	credentials.PerRPCCredentials
-	sendFunc func(sender FDSender)
-}
-
-// PerRPCCredentials - per rpc credentials that will, in addition to applying cred, invoke sendFunc
-// Note: Must be used in concert with grpcfd.TransportCredentials
-func PerRPCCredentials(cred credentials.PerRPCCredentials, sendFunc func(FDSender)) credentials.PerRPCCredentials {
-	return &wrapPerRPCCredentials{
-		PerRPCCredentials: cred,
-		sendFunc:          sendFunc,
-	}
-}
-
-// SendCallOptions - takes an optional list opts of grpc.CallOptions, and either prepends a
-// grpc.PerRPCCredentials(PerRPCCredentials(nil, sendFunc)) or replaces an existing
-// grpc.PerRPCCredsCallOption with one that has used PerRPCCredentials(..., sendFunc) to wrap
-// the existing grpc.PerRPCCredsCallOption.
-// Net-net: use this when you want a client to send files over a unix file socket using
-// FDSender *before* the RPC is sent.
-func SendCallOptions(sendFunc func(FDSender), opts ...grpc.CallOption) []grpc.CallOption {
-	var rv []grpc.CallOption
-	rv = append(rv, grpc.PerRPCCredentials(PerRPCCredentials(nil, sendFunc)))
-	for _, opt := range opts {
-		prcp, ok := opt.(grpc.PerRPCCredsCallOption)
-		if ok {
-			rv[0] = grpc.PerRPCCredentials(PerRPCCredentials(prcp.Creds, sendFunc))
-			continue
-		}
-		rv = append(rv, opt)
-	}
-	return rv
+	FDTransceiver
+	transceiverFuncs []func(FDTransceiver)
+	executor         serialize.Executor
 }
 
 func (w *wrapPerRPCCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	p, ok := peer.FromContext(ctx)
-	if ok {
-		sender, ok := p.Addr.(FDSender)
-		if ok && w.sendFunc != nil {
-			w.sendFunc(sender)
+	<-w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			return
 		}
-	}
+		if trans, ok := FromContext(ctx); ok {
+			w.FDTransceiver = trans
+			for _, f := range w.transceiverFuncs {
+				f(trans)
+			}
+			w.transceiverFuncs = nil
+		}
+	})
 	if w.PerRPCCredentials != nil {
 		return w.PerRPCCredentials.GetRequestMetadata(ctx, uri...)
 	}
@@ -77,4 +56,168 @@ func (w *wrapPerRPCCredentials) RequireTransportSecurity() bool {
 		return w.PerRPCCredentials.RequireTransportSecurity()
 	}
 	return false
+}
+
+func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
+	out := make(chan error, 1)
+	var transceiver FDTransceiver
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinErrChs(transceiver.SendFD(fd), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.SendFD(fd)
+	}
+	return out
+}
+
+func (w *wrapPerRPCCredentials) SendFile(file SyscallConn) <-chan error {
+	out := make(chan error, 1)
+	var transceiver FDTransceiver
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinErrChs(transceiver.SendFile(file), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.SendFile(file)
+	}
+	return out
+}
+
+func (w *wrapPerRPCCredentials) RecvFD(dev, inode uint64) <-chan uintptr {
+	out := make(chan uintptr, 1)
+	var transceiver FDTransceiver
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFDChs(transceiver.RecvFD(dev, inode), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.RecvFD(dev, inode)
+	}
+	return out
+}
+
+func (w *wrapPerRPCCredentials) RecvFile(dev, ino uint64) <-chan *os.File {
+	out := make(chan *os.File, 1)
+	var transceiver FDTransceiver
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFileChs(transceiver.RecvFile(dev, ino), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.RecvFile(dev, ino)
+	}
+	return out
+}
+
+func (w *wrapPerRPCCredentials) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
+	dev, ino, err := URLStringToDevIno(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan *os.File, 1)
+	var transceiver FDTransceiver
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFileChs(transceiver.RecvFile(dev, ino), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.RecvFileByURL(urlStr)
+	}
+	return out, nil
+}
+
+func (w *wrapPerRPCCredentials) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
+	dev, ino, err := URLStringToDevIno(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan uintptr, 1)
+	var transceiver FDTransceiver
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			transceiver = w.FDTransceiver
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFDChs(transceiver.RecvFD(dev, ino), out)
+		})
+	})
+	if transceiver != nil {
+		return transceiver.RecvFDByURL(urlStr)
+	}
+	return out, nil
+}
+
+func joinErrChs(in <-chan error, out chan<- error) {
+	for err := range in {
+		out <- err
+	}
+	close(out)
+}
+
+func joinFileChs(in <-chan *os.File, out chan<- *os.File) {
+	for file := range in {
+		out <- file
+	}
+	close(out)
+}
+
+func joinFDChs(in <-chan uintptr, out chan<- uintptr) {
+	for fd := range in {
+		out <- fd
+	}
+	close(out)
+}
+
+// PerRPCCredentials - per rpc credentials that will, in addition to applying cred, invoke sendFunc
+// Note: Must be used in concert with grpcfd.TransportCredentials
+func PerRPCCredentials(cred credentials.PerRPCCredentials) credentials.PerRPCCredentials {
+	return &wrapPerRPCCredentials{
+		PerRPCCredentials: cred,
+	}
+}
+
+// PerRPCCredentialsFromCallOptions - extract credentials.PerRPCCredentials from a list of grpc.CallOptions
+func PerRPCCredentialsFromCallOptions(opts ...grpc.CallOption) credentials.PerRPCCredentials {
+	for i := len(opts) - 1; i >= 0; i-- {
+		if prcp, ok := opts[i].(grpc.PerRPCCredsCallOption); ok {
+			return prcp.Creds
+		}
+	}
+	return nil
+}
+
+// FromPerRPCCredentials - return grpcfd.FDTransceiver from credentials.PerRPCCredentials
+//                         ok is true of successful, false otherwise
+func FromPerRPCCredentials(rpcCredentials credentials.PerRPCCredentials) (transceiver FDTransceiver, ok bool) {
+	if transceiver, ok = rpcCredentials.(FDTransceiver); ok {
+		return transceiver, true
+	}
+	return nil, false
 }
