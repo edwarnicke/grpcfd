@@ -31,6 +31,9 @@ type wrapTransportCredentials struct {
 // TransportCredentials - transport credentials that will, in addition to applying cred, cause peer.Addr to supply
 // the FDSender and FDRecver interfaces
 func TransportCredentials(cred credentials.TransportCredentials, capturers ...func(FDSender)) credentials.TransportCredentials {
+	if _, ok := cred.(*wrapTransportCredentials); ok {
+		return cred
+	}
 	return &wrapTransportCredentials{
 		TransportCredentials: cred,
 		capturers:            capturers,
@@ -38,7 +41,7 @@ func TransportCredentials(cred credentials.TransportCredentials, capturers ...fu
 }
 
 func (c *wrapTransportCredentials) ClientHandshake(ctx context.Context, authority string, rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	conn := wrapGrpcFDConn(rawConn)
+	conn := wrapConn(rawConn)
 	fdsender, ok := conn.(FDSender)
 	var authInfo credentials.AuthInfo
 	var err error
@@ -54,7 +57,7 @@ func (c *wrapTransportCredentials) ClientHandshake(ctx context.Context, authorit
 }
 
 func (c *wrapTransportCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	conn := wrapGrpcFDConn(rawConn)
+	conn := wrapConn(rawConn)
 	var authInfo credentials.AuthInfo
 	var err error
 	if c.TransportCredentials != nil {

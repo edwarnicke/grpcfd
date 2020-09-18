@@ -29,6 +29,10 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
+const (
+	maxFDCount = 64
+)
+
 // SyscallConn - having the SyscallConn method to access syscall.RawConn
 type SyscallConn interface {
 	SyscallConn() (syscall.RawConn, error)
@@ -60,10 +64,11 @@ type inodeKey struct {
 	ino uint64
 }
 
-type grpcFDConn struct {
+type connWrap struct {
 	net.Conn
 
-	sendFD       []func(b []byte) (n int, err error)
+	sendFDs      []int
+	errChs       []chan error
 	sendExecutor serialize.Executor
 
 	recvFDChans  map[inodeKey][]chan uintptr
@@ -71,14 +76,17 @@ type grpcFDConn struct {
 	recvExecutor serialize.Executor
 }
 
-func wrapGrpcFDConn(conn net.Conn) net.Conn {
+func wrapConn(conn net.Conn) net.Conn {
+	if _, ok := conn.(*connWrap); ok {
+		return conn
+	}
 	_, ok := conn.(interface {
 		WriteMsgUnix(b, oob []byte, addr *net.UnixAddr) (n, oobn int, err error)
 	})
 	if !ok {
 		return conn
 	}
-	conn = &grpcFDConn{
+	conn = &connWrap{
 		Conn:        conn,
 		recvFDChans: make(map[inodeKey][]chan uintptr),
 		recvedFDs:   make(map[inodeKey]uintptr),
@@ -89,7 +97,7 @@ func wrapGrpcFDConn(conn net.Conn) net.Conn {
 	return conn
 }
 
-func (w *grpcFDConn) Close() error {
+func (w *connWrap) Close() error {
 	err := w.Conn.Close()
 	w.recvExecutor.AsyncExec(func() {
 		for k, fd := range w.recvedFDs {
@@ -102,46 +110,69 @@ func (w *grpcFDConn) Close() error {
 			}
 			delete(w.recvFDChans, k)
 		}
+		for k, fd := range w.sendFDs {
+			w.errChs[k] <- errors.Errorf("unable to send fd %d because connection closed", fd)
+			close(w.errChs[k])
+			_ = syscall.Close(fd)
+		}
 	})
 	return err
 }
 
-func (w *grpcFDConn) Write(b []byte) (int, error) {
-	var write func(b []byte) (int, error)
+func (w *connWrap) Write(b []byte) (int, error) {
+	var sendFDs []int
+	var errChs []chan error
 	<-w.sendExecutor.AsyncExec(func() {
-		if len(w.sendFD) > 0 {
-			write = w.sendFD[0]
+		if len(w.sendFDs) > 0 {
+			limit := len(w.sendFDs)
+			if maxFDCount < limit {
+				limit = maxFDCount
+			}
+			sendFDs = w.sendFDs[:limit]
+			w.sendFDs = w.sendFDs[limit:]
+			errChs = w.errChs[:limit]
+			w.errChs = w.errChs[limit:]
 		}
 	})
-	if write != nil {
-		n, err := write(b)
-		return n, err
+	for i, fd := range sendFDs {
+		rights := syscall.UnixRights(fd)
+		// TODO handle when n != 1 and handle oobn not as expected
+		// maybe with a for {n == 0} ?
+		// maybe if oobn == 0 we simply prepend the remainder of the fds to w.sendFDs and call it good?
+		_, _, err := w.Conn.(interface {
+			WriteMsgUnix(b, oob []byte, addr *net.UnixAddr) (n, oobn int, err error)
+		}).WriteMsgUnix([]byte{b[i]}, rights, nil)
+		if err != nil {
+			errChs[i] <- err
+		}
+		close(errChs[i])
+		_ = syscall.Close(fd)
 	}
-	n, err := w.Conn.Write(b)
+	n, err := w.Conn.Write(b[len(sendFDs):])
 	if err != nil {
 		return 0, err
 	}
-	return n, err
+	return n + len(sendFDs), err
 }
 
-func (w *grpcFDConn) SendFD(fd uintptr) <-chan error {
+func (w *connWrap) SendFD(fd uintptr) <-chan error {
 	errCh := make(chan error, 1)
+	// Dup the fd because we have no way of knowing what the caller will do with it between
+	// now and when we can send it
+	fd, _, err := syscall.Syscall(syscall.SYS_FCNTL, fd, uintptr(syscall.F_DUPFD), 0)
+	if err != 0 {
+		errCh <- errors.WithStack(err)
+		close(errCh)
+		return errCh
+	}
 	w.sendExecutor.AsyncExec(func() {
-		w.sendFD = append(w.sendFD, func(b []byte) (n int, err error) {
-			rights := syscall.UnixRights(int(fd))
-			n, _, err = w.Conn.(interface {
-				WriteMsgUnix(b, oob []byte, addr *net.UnixAddr) (n, oobn int, err error)
-			}).WriteMsgUnix(b, rights, nil)
-			w.sendFD = w.sendFD[1:]
-			errCh <- err
-			close(errCh)
-			return n, err
-		})
+		w.sendFDs = append(w.sendFDs, int(fd))
+		w.errChs = append(w.errChs, errCh)
 	})
 	return errCh
 }
 
-func (w *grpcFDConn) SendFile(file SyscallConn) <-chan error {
+func (w *connWrap) SendFile(file SyscallConn) <-chan error {
 	errCh := make(chan error, 1)
 	raw, err := file.SyscallConn()
 	if err != nil {
@@ -171,19 +202,19 @@ func (w *grpcFDConn) SendFile(file SyscallConn) <-chan error {
 	return errCh
 }
 
-func (w *grpcFDConn) RemoteAddr() net.Addr {
+func (w *connWrap) RemoteAddr() net.Addr {
 	return w
 }
 
-func (w *grpcFDConn) Network() string {
+func (w *connWrap) Network() string {
 	return w.Conn.RemoteAddr().Network()
 }
 
-func (w *grpcFDConn) String() string {
+func (w *connWrap) String() string {
 	return w.Conn.RemoteAddr().String()
 }
 
-func (w *grpcFDConn) RecvFD(dev, ino uint64) <-chan uintptr {
+func (w *connWrap) RecvFD(dev, ino uint64) <-chan uintptr {
 	fdCh := make(chan uintptr, 1)
 	w.recvExecutor.AsyncExec(func() {
 		key := inodeKey{
@@ -212,7 +243,7 @@ func (w *grpcFDConn) RecvFD(dev, ino uint64) <-chan uintptr {
 	return fdCh
 }
 
-func (w *grpcFDConn) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
+func (w *connWrap) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
 	dev, ino, err := URLStringToDevIno(urlStr)
 	if err != nil {
 		return nil, err
@@ -220,7 +251,7 @@ func (w *grpcFDConn) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
 	return w.RecvFD(dev, ino), nil
 }
 
-func (w *grpcFDConn) RecvFile(dev, ino uint64) <-chan *os.File {
+func (w *connWrap) RecvFile(dev, ino uint64) <-chan *os.File {
 	fileCh := make(chan *os.File, 1)
 	go func(fdCh <-chan uintptr, fileCh chan<- *os.File) {
 		for fd := range fdCh {
@@ -235,7 +266,7 @@ func (w *grpcFDConn) RecvFile(dev, ino uint64) <-chan *os.File {
 	return fileCh
 }
 
-func (w *grpcFDConn) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
+func (w *connWrap) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
 	dev, ino, err := URLStringToDevIno(urlStr)
 	if err != nil {
 		return nil, err
@@ -243,10 +274,9 @@ func (w *grpcFDConn) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
 	return w.RecvFile(dev, ino), nil
 }
 
-func (w *grpcFDConn) Read(b []byte) (n int, err error) {
-	oob := make([]byte, syscall.CmsgSpace(4))
-	var oobn int
-	n, oobn, _, _, err = w.Conn.(interface {
+func (w *connWrap) Read(b []byte) (n int, err error) {
+	oob := make([]byte, syscall.CmsgSpace(4*maxFDCount))
+	n, oobn, _, _, err := w.Conn.(interface {
 		ReadMsgUnix(b, oob []byte) (n, oobn, flags int, addr *net.UnixAddr, err error)
 	}).ReadMsgUnix(b, oob)
 
@@ -254,49 +284,50 @@ func (w *grpcFDConn) Read(b []byte) (n int, err error) {
 	w.recvExecutor.AsyncExec(func() {
 		// We got oob info
 		if oobn != 0 {
-			msgs, parseCtlErr := syscall.ParseSocketControlMessage(oob)
+			msgs, parseCtlErr := syscall.ParseSocketControlMessage(oob[:oobn])
 			if parseCtlErr != nil {
 				return
 			}
-			fds, parseRightsErr := syscall.ParseUnixRights(&msgs[0])
-			if parseRightsErr != nil {
-				return
-			}
-			for _, fd := range fds {
-				var stat syscall.Stat_t
-
-				// Get the (dev,ino) for the fd
-				fstatErr := syscall.Fstat(fd, &stat)
-				if fstatErr != nil {
-					continue
+			for i := range msgs {
+				fds, parseRightsErr := syscall.ParseUnixRights(&msgs[i])
+				if parseRightsErr != nil {
+					return
 				}
-				key := inodeKey{
-					dev: uint64(stat.Dev),
-					ino: stat.Ino,
-				}
+				for _, fd := range fds {
+					var stat syscall.Stat_t
 
-				// If we have one already... close the new one
-				if _, ok := w.recvedFDs[key]; ok {
-					_ = syscall.Close(fd)
-					continue
-				}
-
-				// If its new store it in our map of recvedFDs
-				w.recvedFDs[key] = uintptr(fd)
-
-				// Iterate through any waiting receivers
-				for _, fdCh := range w.recvFDChans[key] {
-					// Copy the fd.  Always copy the fd.  Who knows what the recipient might choose to do with it.
-					fd, _, errno := syscall.Syscall(syscall.SYS_FCNTL, w.recvedFDs[key], uintptr(syscall.F_DUPFD), 0)
-					if errno != 0 {
-						// TODO - this is terrible error handling
-						close(fdCh)
+					// Get the (dev,ino) for the fd
+					fstatErr := syscall.Fstat(fd, &stat)
+					if fstatErr != nil {
 						continue
 					}
-					fdCh <- fd
-					close(fdCh)
+					key := inodeKey{
+						dev: uint64(stat.Dev),
+						ino: stat.Ino,
+					}
+
+					// If we have one already... close the new one
+					if _, ok := w.recvedFDs[key]; ok {
+						_ = syscall.Close(fd)
+						continue
+					}
+
+					// If its new store it in our map of recvedFDs
+					w.recvedFDs[key] = uintptr(fd)
+
+					// Iterate through any waiting receivers
+					for _, fdCh := range w.recvFDChans[key] {
+						// Copy the fd.  Always copy the fd.  Who knows what the recipient might choose to do with it.
+						fd, _, errno := syscall.Syscall(syscall.SYS_FCNTL, w.recvedFDs[key], uintptr(syscall.F_DUPFD), 0)
+						if errno != 0 { // TODO - this is terrible error handling
+							close(fdCh)
+							continue
+						}
+						fdCh <- fd
+						close(fdCh)
+					}
+					delete(w.recvFDChans, key)
 				}
-				delete(w.recvFDChans, key)
 			}
 		}
 	})

@@ -52,6 +52,7 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 		})
 	})
 	if transceiver != nil {
+		defer func() { _ = file.Close() }()
 		return transceiver.SendFile(file)
 	}
 	return out
