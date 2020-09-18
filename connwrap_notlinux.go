@@ -22,7 +22,7 @@ import (
 	"os"
 )
 
-func (w *grpcFDConn) SendFilename(filename string) <-chan error {
+func (w *connWrap) SendFilename(filename string) <-chan error {
 	errCh := make(chan error, 1)
 	// Note: this will fail in most cases for 'unopenable' files (like unix file sockets).  See use of O_PATH in connwrap_linux.go for
 	// the trick that makes this work in Linux
@@ -42,5 +42,6 @@ func (w *grpcFDConn) SendFilename(filename string) <-chan error {
 		}
 		close(errChOut)
 	}(w.SendFile(file), errCh)
+	_ = file.Close()
 	return errCh
 }

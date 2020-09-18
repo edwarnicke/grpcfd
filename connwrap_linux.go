@@ -24,7 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (w *grpcFDConn) SendFilename(filename string) <-chan error {
+func (w *connWrap) SendFilename(filename string) <-chan error {
 	errCh := make(chan error, 1)
 	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
 	if err != nil {
@@ -42,5 +42,6 @@ func (w *grpcFDConn) SendFilename(filename string) <-chan error {
 		}
 		close(errChOut)
 	}(w.SendFile(file), errCh)
+	_ = file.Close()
 	return errCh
 }

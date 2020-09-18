@@ -198,6 +198,9 @@ func joinFDChs(in <-chan uintptr, out chan<- uintptr) {
 // PerRPCCredentials - per rpc credentials that will, in addition to applying cred, invoke sendFunc
 // Note: Must be used in concert with grpcfd.TransportCredentials
 func PerRPCCredentials(cred credentials.PerRPCCredentials) credentials.PerRPCCredentials {
+	if _, ok := cred.(*wrapPerRPCCredentials); ok {
+		return cred
+	}
 	return &wrapPerRPCCredentials{
 		PerRPCCredentials: cred,
 	}
