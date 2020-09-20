@@ -33,14 +33,14 @@ type wrapPerRPCCredentials struct {
 }
 
 func (w *wrapPerRPCCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	<-w.executor.AsyncExec(func() {
+	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
 			return
 		}
-		if trans, ok := FromContext(ctx); ok {
-			w.FDTransceiver = trans
+		if transceiver, ok := FromContext(ctx); ok {
+			w.FDTransceiver = transceiver
 			for _, f := range w.transceiverFuncs {
-				f(trans)
+				f(transceiver)
 			}
 			w.transceiverFuncs = nil
 		}
@@ -60,73 +60,57 @@ func (w *wrapPerRPCCredentials) RequireTransportSecurity() bool {
 
 func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
 	out := make(chan error, 1)
-	var transceiver FDTransceiver
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go joinErrChs(w.FDTransceiver.SendFD(fd), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go joinErrChs(transceiver.SendFD(fd), out)
 		})
 	})
-	if transceiver != nil {
-		return transceiver.SendFD(fd)
-	}
 	return out
 }
 
 func (w *wrapPerRPCCredentials) SendFile(file SyscallConn) <-chan error {
 	out := make(chan error, 1)
-	var transceiver FDTransceiver
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go joinErrChs(w.FDTransceiver.SendFile(file), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go joinErrChs(transceiver.SendFile(file), out)
 		})
 	})
-	if transceiver != nil {
-		return transceiver.SendFile(file)
-	}
 	return out
 }
 
 func (w *wrapPerRPCCredentials) RecvFD(dev, inode uint64) <-chan uintptr {
 	out := make(chan uintptr, 1)
-	var transceiver FDTransceiver
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go joinFDChs(w.FDTransceiver.RecvFD(dev, inode), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go joinFDChs(transceiver.RecvFD(dev, inode), out)
 		})
 	})
-	if transceiver != nil {
-		return transceiver.RecvFD(dev, inode)
-	}
 	return out
 }
 
 func (w *wrapPerRPCCredentials) RecvFile(dev, ino uint64) <-chan *os.File {
 	out := make(chan *os.File, 1)
-	var transceiver FDTransceiver
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go joinFileChs(w.FDTransceiver.RecvFile(dev, ino), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go joinFileChs(transceiver.RecvFile(dev, ino), out)
 		})
 	})
-	if transceiver != nil {
-		return transceiver.RecvFile(dev, ino)
-	}
 	return out
 }
 
@@ -136,19 +120,15 @@ func (w *wrapPerRPCCredentials) RecvFileByURL(urlStr string) (<-chan *os.File, e
 		return nil, err
 	}
 	out := make(chan *os.File, 1)
-	var transceiver FDTransceiver
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go joinFileChs(w.FDTransceiver.RecvFile(dev, ino), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go joinFileChs(transceiver.RecvFile(dev, ino), out)
 		})
 	})
-	if transceiver != nil {
-		return transceiver.RecvFileByURL(urlStr)
-	}
 	return out, nil
 }
 
@@ -158,19 +138,15 @@ func (w *wrapPerRPCCredentials) RecvFDByURL(urlStr string) (<-chan uintptr, erro
 		return nil, err
 	}
 	out := make(chan uintptr, 1)
-	var transceiver FDTransceiver
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go joinFDChs(w.FDTransceiver.RecvFD(dev, ino), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go joinFDChs(transceiver.RecvFD(dev, ino), out)
 		})
 	})
-	if transceiver != nil {
-		return transceiver.RecvFDByURL(urlStr)
-	}
 	return out, nil
 }
 

@@ -22,8 +22,7 @@ import "os"
 
 func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 	out := make(chan error, 1)
-	var transceiver FDTransceiver
-	// Note: this will fail in most cases for 'unopenable' files (like unix file sockets).  See use of O_PATH in connwrap_linux.go for
+	// Note: this will fail in most cases for 'unopenable' files (like unix file sockets).  See use of O_PATH in per_rpc_transport_credentials_linux.go for
 	// the trick that makes this work in Linux
 	file, err := os.Open(filename) // #nosec
 	if err != nil {
@@ -33,25 +32,18 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 	}
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go func(in <-chan error, out chan<- error, file *os.File) {
+				joinErrChs(in, out)
+				_ = file.Close()
+			}(w.FDTransceiver.SendFile(file), out, file)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go func(errChIn <-chan error, errChOut chan<- error) {
-				for err := range errChIn {
-					errChOut <- err
-				}
-				err := file.Close()
-				if err != nil {
-					errChOut <- err
-				}
-				close(errChOut)
-			}(transceiver.SendFile(file), out)
+			go func(in <-chan error, out chan<- error, file *os.File) {
+				joinErrChs(in, out)
+				_ = file.Close()
+			}(transceiver.SendFile(file), out, file)
 		})
 	})
-	if transceiver != nil {
-		defer func() { _ = file.Close() }()
-		return transceiver.SendFile(file)
-	}
 	return out
 }
