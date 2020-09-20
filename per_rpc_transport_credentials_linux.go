@@ -26,7 +26,6 @@ import (
 
 func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 	out := make(chan error, 1)
-	var transceiver FDTransceiver
 	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
 	if err != nil {
 		out <- err
@@ -35,25 +34,18 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 	}
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			transceiver = w.FDTransceiver
+			go func(in <-chan error, out chan<- error, file *os.File) {
+				joinErrChs(in, out)
+				_ = file.Close()
+			}(w.FDTransceiver.SendFile(file), out, file)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go func(errChIn <-chan error, errChOut chan<- error) {
-				for err := range errChIn {
-					errChOut <- err
-				}
-				err := file.Close()
-				if err != nil {
-					errChOut <- err
-				}
-				close(errChOut)
-			}(transceiver.SendFile(file), out)
+			go func(in <-chan error, out chan<- error, file *os.File) {
+				joinErrChs(in, out)
+				_ = file.Close()
+			}(transceiver.SendFile(file), out, file)
 		})
 	})
-	if transceiver != nil {
-		defer func() { _ = file.Close() }()
-		return transceiver.SendFile(file)
-	}
 	return out
 }
