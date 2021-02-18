@@ -23,8 +23,17 @@ Simply wrap whatever normal transport credentials you use (nil is an acceptable 
 
 ```go
 var creds credentials.TransportCredentials
-cc,err := grpc.DialContext(ctx,grpc.WithTransportCredentials(grpcfd.TransportCredentials(creds)))
+cc, err := grpc.DialContext(ctx ,grpc.WithTransportCredentials(grpcfd.TransportCredentials(creds)))
 ```
+
+Note: If your client already using PerRPCCredentials consider to use:
+
+```go
+var creds credentials.TransportCredentials
+cc, err := grpc.DialContext(ctx, grpc.WithTransportCredentials(grpcfd.TransportCredentials(creds)), grpcfd.WithChainStreamInterceptor(), grpcfd.WithChainUnaryInterceptor())
+```
+This allows to grpcfd do not overwrite your grpc.PerRPCCredentials.
+
 
 # Server Setup
 Simply wrap whatever normal credentials you use (nil is an acceptable value) using
