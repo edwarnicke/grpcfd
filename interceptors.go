@@ -63,7 +63,7 @@ func mergePerCredentialsCallOptions(callOpts ...grpc.CallOption) []grpc.CallOpti
 
 // WithChainUnaryInterceptor returns a DialOption that specifies the chained
 // interceptor for unary RPCs. This interceptor combines all grpc.PerRPCCredsCallOption options into one.
-//That allows using a few credentials.PerRPCCredentials passed from default call options and from the client call.
+// That allows using a few credentials.PerRPCCredentials passed from default call options and from the client call.
 func WithChainUnaryInterceptor() grpc.DialOption {
 	return grpc.WithChainUnaryInterceptor(func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		return invoker(ctx, method, req, reply, cc, mergePerCredentialsCallOptions(opts...)...)
@@ -72,7 +72,7 @@ func WithChainUnaryInterceptor() grpc.DialOption {
 
 // WithChainStreamInterceptor returns a DialOption that specifies the chained
 // interceptor for streaming RPCs.This interceptor combines all grpc.PerRPCCredsCallOption options into one.
-//That allows using a few credentials.PerRPCCredentials passed from default call options and from the client call.
+// That allows using a few credentials.PerRPCCredentials passed from default call options and from the client call.
 func WithChainStreamInterceptor() grpc.DialOption {
 	return grpc.WithChainUnaryInterceptor(func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		return invoker(ctx, method, req, reply, cc, mergePerCredentialsCallOptions(opts...)...)

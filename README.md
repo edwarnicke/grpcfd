@@ -26,7 +26,7 @@ var creds credentials.TransportCredentials
 cc, err := grpc.DialContext(ctx ,grpc.WithTransportCredentials(grpcfd.TransportCredentials(creds)))
 ```
 
-Note: If your client already using PerRPCCredentials consider to use:
+Note: If your client already using PerRPCCredentials by default consider to use:
 
 ```go
 var creds credentials.TransportCredentials
