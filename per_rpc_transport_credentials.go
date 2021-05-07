@@ -35,7 +35,7 @@ type wrapPerRPCCredentials struct {
 }
 
 func (w *wrapPerRPCCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	w.executor.AsyncExec(func() {
+	<-w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
 			return
 		}
