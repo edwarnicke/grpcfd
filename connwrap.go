@@ -93,13 +93,18 @@ func wrapConn(conn net.Conn) net.Conn {
 		recvFDChans: make(map[inodeKey][]chan uintptr),
 		recvedFDs:   make(map[inodeKey]uintptr),
 	}
-	runtime.SetFinalizer(conn, func(conn net.Conn) {
-		_ = conn.Close()
+	runtime.SetFinalizer(conn, func(conn *connWrap) {
+		_ = conn.close()
 	})
 	return conn
 }
 
 func (w *connWrap) Close() error {
+	runtime.SetFinalizer(w, nil)
+	return w.close()
+}
+
+func (w *connWrap) close() error {
 	err := w.Conn.Close()
 	w.recvExecutor.AsyncExec(func() {
 		for k, fd := range w.recvedFDs {
