@@ -19,7 +19,7 @@
 package grpcfd
 
 import (
-	context "context"
+	"context"
 	"os"
 
 	"github.com/edwarnicke/serialize"
@@ -35,6 +35,9 @@ type wrapPerRPCCredentials struct {
 }
 
 func (w *wrapPerRPCCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	if v, ok := ctx.Value("message").(string); ok {
+		println(">>>", v)
+	}
 	<-w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
 			return
