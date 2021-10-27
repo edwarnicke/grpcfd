@@ -31,14 +31,7 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 		return out
 	}
 	w.executor.AsyncExec(func() {
-		if w.FDTransceiver != nil {
-			go func(in <-chan error, out chan<- error, file *os.File) {
-				joinErrChs(in, out)
-				_ = file.Close()
-			}(w.FDTransceiver.SendFile(file), out, file)
-			return
-		}
-		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+		w.senderFuncs = append(w.senderFuncs, func(transceiver FDSender) {
 			go func(in <-chan error, out chan<- error, file *os.File) {
 				joinErrChs(in, out)
 				_ = file.Close()
