@@ -20,6 +20,7 @@ package grpcfd
 
 import (
 	"context"
+	"sync"
 
 	"github.com/edwarnicke/serialize"
 	"google.golang.org/grpc"
@@ -55,9 +56,20 @@ func (w *wrapPerRPCCredentials) RequireTransportSecurity() bool {
 
 func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
 	out := make(chan error, 1)
+	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
 		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
-			go joinErrChs(sender.SendFD(fd), out)
+			go func() {
+				if sender != nil {
+					wg.Add(1)
+					defer wg.Done()
+
+					joinErrChs(sender.SendFD(fd), out)
+				} else {
+					wg.Wait()
+					close(out)
+				}
+			}()
 		})
 	})
 	return out
@@ -65,9 +77,20 @@ func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
 
 func (w *wrapPerRPCCredentials) SendFile(file SyscallConn) <-chan error {
 	out := make(chan error, 1)
+	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
-		w.senderFuncs = append(w.senderFuncs, func(transceiver FDSender) {
-			go joinErrChs(transceiver.SendFile(file), out)
+		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
+			go func() {
+				if sender != nil {
+					wg.Add(1)
+					defer wg.Done()
+
+					joinErrChs(sender.SendFile(file), out)
+				} else {
+					wg.Wait()
+					close(out)
+				}
+			}()
 		})
 	})
 	return out
@@ -77,18 +100,28 @@ func joinErrChs(in <-chan error, out chan<- error) {
 	for err := range in {
 		out <- err
 	}
-	close(out)
 }
 
 // PerRPCCredentials - per rpc credentials that will, in addition to applying cred, invoke sendFunc
 // Note: Must be used in concert with grpcfd.TransportCredentials
-func PerRPCCredentials(cred credentials.PerRPCCredentials) credentials.PerRPCCredentials {
+func PerRPCCredentials(ctx context.Context, cred credentials.PerRPCCredentials) credentials.PerRPCCredentials {
 	if _, ok := cred.(*wrapPerRPCCredentials); ok {
 		return cred
 	}
-	return &wrapPerRPCCredentials{
+
+	w := &wrapPerRPCCredentials{
 		PerRPCCredentials: cred,
 	}
+	go func() {
+		<-ctx.Done()
+		w.executor.AsyncExec(func() {
+			for _, f := range w.senderFuncs {
+				f(nil)
+			}
+			w.senderFuncs = nil
+		})
+	}()
+	return w
 }
 
 // PerRPCCredentialsFromCallOptions - extract credentials.PerRPCCredentials from a list of grpc.CallOptions

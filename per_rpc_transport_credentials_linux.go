@@ -20,6 +20,7 @@ package grpcfd
 
 import (
 	"os"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -32,12 +33,20 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 		close(out)
 		return out
 	}
+	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
 		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
-			go func(in <-chan error, out chan<- error, file *os.File) {
-				joinErrChs(in, out)
-				_ = file.Close()
-			}(sender.SendFile(file), out, file)
+			go func() {
+				if sender != nil {
+					wg.Add(1)
+					defer wg.Done()
+					joinErrChs(sender.SendFile(file), out)
+				} else {
+					wg.Wait()
+					_ = file.Close()
+					close(out)
+				}
+			}()
 		})
 	})
 	return out
