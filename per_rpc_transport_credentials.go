@@ -59,13 +59,15 @@ func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
 	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
 		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
+			wg.Add(1)
+
 			go func() {
 				if sender != nil {
-					wg.Add(1)
 					defer wg.Done()
 
 					joinErrChs(sender.SendFD(fd), out)
 				} else {
+					wg.Done()
 					wg.Wait()
 					close(out)
 				}
@@ -80,13 +82,13 @@ func (w *wrapPerRPCCredentials) SendFile(file SyscallConn) <-chan error {
 	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
 		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
+			wg.Add(1)
 			go func() {
 				if sender != nil {
-					wg.Add(1)
 					defer wg.Done()
-
 					joinErrChs(sender.SendFile(file), out)
 				} else {
+					wg.Done()
 					wg.Wait()
 					close(out)
 				}

@@ -36,12 +36,14 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
 		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
+			wg.Add(1)
+
 			go func() {
 				if sender != nil {
-					wg.Add(1)
 					defer wg.Done()
 					joinErrChs(sender.SendFile(file), out)
 				} else {
+					wg.Done()
 					wg.Wait()
 					_ = file.Close()
 					close(out)
