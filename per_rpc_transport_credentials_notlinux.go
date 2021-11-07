@@ -18,7 +18,10 @@
 
 package grpcfd
 
-import "os"
+import (
+	"os"
+	"sync"
+)
 
 func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 	out := make(chan error, 1)
@@ -30,19 +33,22 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 		close(out)
 		return out
 	}
+	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
-		if w.FDTransceiver != nil {
-			go func(in <-chan error, out chan<- error, file *os.File) {
-				joinErrChs(in, out)
-				_ = file.Close()
-			}(w.FDTransceiver.SendFile(file), out, file)
-			return
-		}
-		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go func(in <-chan error, out chan<- error, file *os.File) {
-				joinErrChs(in, out)
-				_ = file.Close()
-			}(transceiver.SendFile(file), out, file)
+		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
+			wg.Add(1)
+
+			go func() {
+				if sender != nil {
+					defer wg.Done()
+					joinErrChs(sender.SendFile(file), out)
+				} else {
+					wg.Done()
+					wg.Wait()
+					_ = file.Close()
+					close(out)
+				}
+			}()
 		})
 	})
 	return out
