@@ -19,8 +19,8 @@
 package grpcfd
 
 import (
-	"context"
-	"sync"
+	context "context"
+	"os"
 
 	"github.com/edwarnicke/serialize"
 	"google.golang.org/grpc"
@@ -29,16 +29,22 @@ import (
 
 type wrapPerRPCCredentials struct {
 	credentials.PerRPCCredentials
-	senderFuncs []func(FDSender)
-	executor    serialize.Executor
+	FDTransceiver
+	transceiverFuncs []func(FDTransceiver)
+	executor         serialize.Executor
 }
 
 func (w *wrapPerRPCCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
 	<-w.executor.AsyncExec(func() {
-		if sender, ok := FromContext(ctx); ok {
-			for _, f := range w.senderFuncs {
-				f(sender)
+		if w.FDTransceiver != nil {
+			return
+		}
+		if transceiver, ok := FromContext(ctx); ok {
+			w.FDTransceiver = transceiver
+			for _, f := range w.transceiverFuncs {
+				f(transceiver)
 			}
+			w.transceiverFuncs = nil
 		}
 	})
 	if w.PerRPCCredentials != nil {
@@ -56,22 +62,13 @@ func (w *wrapPerRPCCredentials) RequireTransportSecurity() bool {
 
 func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
 	out := make(chan error, 1)
-	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
-		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
-			wg.Add(1)
-
-			go func() {
-				if sender != nil {
-					defer wg.Done()
-
-					joinErrChs(sender.SendFD(fd), out)
-				} else {
-					wg.Done()
-					wg.Wait()
-					close(out)
-				}
-			}()
+		if w.FDTransceiver != nil {
+			go joinErrChs(w.FDTransceiver.SendFD(fd), out)
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinErrChs(transceiver.SendFD(fd), out)
 		})
 	})
 	return out
@@ -79,51 +76,112 @@ func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
 
 func (w *wrapPerRPCCredentials) SendFile(file SyscallConn) <-chan error {
 	out := make(chan error, 1)
-	var wg sync.WaitGroup
 	w.executor.AsyncExec(func() {
-		w.senderFuncs = append(w.senderFuncs, func(sender FDSender) {
-			wg.Add(1)
-			go func() {
-				if sender != nil {
-					defer wg.Done()
-					joinErrChs(sender.SendFile(file), out)
-				} else {
-					wg.Done()
-					wg.Wait()
-					close(out)
-				}
-			}()
+		if w.FDTransceiver != nil {
+			go joinErrChs(w.FDTransceiver.SendFile(file), out)
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinErrChs(transceiver.SendFile(file), out)
 		})
 	})
 	return out
+}
+
+func (w *wrapPerRPCCredentials) RecvFD(dev, inode uint64) <-chan uintptr {
+	out := make(chan uintptr, 1)
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			go joinFDChs(w.FDTransceiver.RecvFD(dev, inode), out)
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFDChs(transceiver.RecvFD(dev, inode), out)
+		})
+	})
+	return out
+}
+
+func (w *wrapPerRPCCredentials) RecvFile(dev, ino uint64) <-chan *os.File {
+	out := make(chan *os.File, 1)
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			go joinFileChs(w.FDTransceiver.RecvFile(dev, ino), out)
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFileChs(transceiver.RecvFile(dev, ino), out)
+		})
+	})
+	return out
+}
+
+func (w *wrapPerRPCCredentials) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
+	dev, ino, err := URLStringToDevIno(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan *os.File, 1)
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			go joinFileChs(w.FDTransceiver.RecvFile(dev, ino), out)
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFileChs(transceiver.RecvFile(dev, ino), out)
+		})
+	})
+	return out, nil
+}
+
+func (w *wrapPerRPCCredentials) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
+	dev, ino, err := URLStringToDevIno(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan uintptr, 1)
+	w.executor.AsyncExec(func() {
+		if w.FDTransceiver != nil {
+			go joinFDChs(w.FDTransceiver.RecvFD(dev, ino), out)
+			return
+		}
+		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
+			go joinFDChs(transceiver.RecvFD(dev, ino), out)
+		})
+	})
+	return out, nil
 }
 
 func joinErrChs(in <-chan error, out chan<- error) {
 	for err := range in {
 		out <- err
 	}
+	close(out)
+}
+
+func joinFileChs(in <-chan *os.File, out chan<- *os.File) {
+	for file := range in {
+		out <- file
+	}
+	close(out)
+}
+
+func joinFDChs(in <-chan uintptr, out chan<- uintptr) {
+	for fd := range in {
+		out <- fd
+	}
+	close(out)
 }
 
 // PerRPCCredentials - per rpc credentials that will, in addition to applying cred, invoke sendFunc
 // Note: Must be used in concert with grpcfd.TransportCredentials
-func PerRPCCredentials(ctx context.Context, cred credentials.PerRPCCredentials) credentials.PerRPCCredentials {
+func PerRPCCredentials(cred credentials.PerRPCCredentials) credentials.PerRPCCredentials {
 	if _, ok := cred.(*wrapPerRPCCredentials); ok {
 		return cred
 	}
-
-	w := &wrapPerRPCCredentials{
+	return &wrapPerRPCCredentials{
 		PerRPCCredentials: cred,
 	}
-	go func() {
-		<-ctx.Done()
-		w.executor.AsyncExec(func() {
-			for _, f := range w.senderFuncs {
-				f(nil)
-			}
-			w.senderFuncs = nil
-		})
-	}()
-	return w
 }
 
 // PerRPCCredentialsFromCallOptions - extract credentials.PerRPCCredentials from a list of grpc.CallOptions
@@ -138,9 +196,9 @@ func PerRPCCredentialsFromCallOptions(opts ...grpc.CallOption) credentials.PerRP
 
 // FromPerRPCCredentials - return grpcfd.FDTransceiver from credentials.PerRPCCredentials
 //                         ok is true of successful, false otherwise
-func FromPerRPCCredentials(rpcCredentials credentials.PerRPCCredentials) (sender FDSender, ok bool) {
-	if sender, ok = rpcCredentials.(FDSender); ok {
-		return sender, true
+func FromPerRPCCredentials(rpcCredentials credentials.PerRPCCredentials) (transceiver FDTransceiver, ok bool) {
+	if transceiver, ok = rpcCredentials.(FDTransceiver); ok {
+		return transceiver, true
 	}
 	return nil, false
 }
