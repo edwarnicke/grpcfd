@@ -117,19 +117,23 @@ func (w *connWrap) close() error {
 			}
 			delete(w.recvFDChans, k)
 		}
-		for k, fd := range w.sendFDs {
-			w.errChs[k] <- errors.Errorf("unable to send fd %d because connection closed", fd)
-			close(w.errChs[k])
-			_ = syscall.Close(fd)
-		}
+		w.sendExecutor.AsyncExec(func() {
+			for k, fd := range w.sendFDs {
+				w.errChs[k] <- errors.Errorf("unable to send fd %d because connection closed", fd)
+				close(w.errChs[k])
+				_ = syscall.Close(fd)
+			}
+		})
 	})
 	return err
 }
 
 func (w *connWrap) Write(b []byte) (int, error) {
-	var sendFDs []int
-	var errChs []chan error
+	var n int
+	var err error
 	<-w.sendExecutor.AsyncExec(func() {
+		var sendFDs []int
+		var errChs []chan error
 		if len(w.sendFDs) > 0 {
 			limit := len(w.sendFDs)
 			if maxFDCount < limit {
@@ -140,26 +144,27 @@ func (w *connWrap) Write(b []byte) (int, error) {
 			errChs = w.errChs[:limit]
 			w.errChs = w.errChs[limit:]
 		}
-	})
-	for i, fd := range sendFDs {
-		rights := syscall.UnixRights(fd)
-		// TODO handle when n != 1 and handle oobn not as expected
-		// maybe with a for {n == 0} ?
-		// maybe if oobn == 0 we simply prepend the remainder of the fds to w.sendFDs and call it good?
-		_, _, err := w.Conn.(interface {
-			WriteMsgUnix(b, oob []byte, addr *net.UnixAddr) (n, oobn int, err error)
-		}).WriteMsgUnix([]byte{b[i]}, rights, nil)
-		if err != nil {
-			errChs[i] <- err
+
+		for i, fd := range sendFDs {
+			rights := syscall.UnixRights(fd)
+			// TODO handle when n != 1 and handle oobn not as expected
+			// maybe with a for {n == 0} ?
+			// maybe if oobn == 0 we simply prepend the remainder of the fds to w.sendFDs and call it good?
+			_, _, err = w.Conn.(interface {
+				WriteMsgUnix(b, oob []byte, addr *net.UnixAddr) (n, oobn int, err error)
+			}).WriteMsgUnix([]byte{b[i]}, rights, nil)
+			if err != nil {
+				errChs[i] <- err
+			}
+			close(errChs[i])
+			_ = syscall.Close(fd)
 		}
-		close(errChs[i])
-		_ = syscall.Close(fd)
-	}
-	n, err := w.Conn.Write(b[len(sendFDs):])
-	if err != nil {
-		return 0, err
-	}
-	return n + len(sendFDs), err
+		n, err = w.Conn.Write(b[len(sendFDs):])
+		if err == nil {
+			n += len(sendFDs)
+		}
+	})
+	return n, err
 }
 
 func (w *connWrap) SendFD(fd uintptr) <-chan error {
