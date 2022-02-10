@@ -123,6 +123,8 @@ func (w *connWrap) close() error {
 				close(w.errChs[k])
 				_ = syscall.Close(fd)
 			}
+			w.sendFDs = nil
+			w.errChs = nil
 		})
 	})
 	return err
