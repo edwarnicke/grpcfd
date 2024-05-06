@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !windows
 // +build !windows
 
 package grpcfd
@@ -28,6 +29,7 @@ import (
 
 	"github.com/edwarnicke/serialize"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/peer"
 )
 
@@ -268,6 +270,8 @@ func (w *connWrap) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
 func (w *connWrap) RecvFile(dev, ino uint64) <-chan *os.File {
 	fileCh := make(chan *os.File, 1)
 	go func(fdCh <-chan uintptr, fileCh chan<- *os.File) {
+		logrus.Errorf("recvFile -- %v:%v -- start", dev, ino)
+		defer logrus.Errorf("recvFile -- %v:%v -- end", dev, ino)
 		for fd := range fdCh {
 			if runtime.GOOS == "linux" {
 				fileCh <- os.NewFile(fd, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), fd))
@@ -352,14 +356,16 @@ func (w *connWrap) Read(b []byte) (n int, err error) {
 }
 
 // FromPeer - return grpcfd.FDTransceiver from peer.Peer
-//            ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromPeer(p *peer.Peer) (transceiver FDTransceiver, ok bool) {
 	transceiver, ok = p.Addr.(FDTransceiver)
 	return transceiver, ok
 }
 
 // FromContext - return grpcfd.FDTransceiver from context.Context
-//               ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromContext(ctx context.Context) (transceiver FDTransceiver, ok bool) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
