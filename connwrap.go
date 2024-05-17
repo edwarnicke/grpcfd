@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !windows
 // +build !windows
 
 package grpcfd
@@ -352,14 +353,16 @@ func (w *connWrap) Read(b []byte) (n int, err error) {
 }
 
 // FromPeer - return grpcfd.FDTransceiver from peer.Peer
-//            ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromPeer(p *peer.Peer) (transceiver FDTransceiver, ok bool) {
 	transceiver, ok = p.Addr.(FDTransceiver)
 	return transceiver, ok
 }
 
 // FromContext - return grpcfd.FDTransceiver from context.Context
-//               ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromContext(ctx context.Context) (transceiver FDTransceiver, ok bool) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {

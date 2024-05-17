@@ -1,7 +1,8 @@
 ---
 run:
   # concurrency: 6
-  timeout: 1m
+  go: "1.22"
+  timeout: 2m
   issues-exit-code: 1
   tests: true
 linters-settings:
@@ -9,7 +10,6 @@ linters-settings:
     template-path: ".github/ci/license.tmpl"
     values:
       regexp:
-        year-range: ((\d\d\d\d-{{year}})|({{year}}))
         company: .*
         copyright-holder: Copyright \(c\) {{year-range}} {{company}}\n\n
         copyright-holders: ({{copyright-holder}})+
@@ -37,13 +37,11 @@ linters-settings:
     min-len: 2
     min-occurrences: 2
   depguard:
-    list-type: blacklist
-    include-go-root: false
-    packages:
-      - errors
-    packages-with-error-message:
-      # specify an error message to output when a blacklisted package is used
-      - errors: "Please use \"github.com/pkg/errors\" instead of \"errors\" in go imports"
+    rules:
+      main:
+        deny:
+          - pkg: "errors"
+            desc: "Please use \"github.com/pkg/errors\" instead of \"errors\" in go imports"
   misspell:
     locale: US
   unparam:
@@ -152,7 +150,7 @@ linters:
     - staticcheck
     - structcheck
     - stylecheck
-    # - typecheck
+    - typecheck
     # - unconvert
     - unparam
     # - unused
