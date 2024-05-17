@@ -8,8 +8,6 @@ linters-settings:
   goheader:
     template-path: ".github/ci/license.tmpl"
     values:
-      const:
-        year: 2020
       regexp:
         year-range: ((\d\d\d\d-{{year}})|({{year}}))
         company: .*
