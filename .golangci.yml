@@ -126,7 +126,7 @@ linters:
   enable:
     # - rowserrcheck
     - bodyclose
-    - deadcode
+    # - deadcode
     - depguard
     - dupl
     - errcheck
@@ -137,24 +137,24 @@ linters:
     - gocyclo
     - gofmt
     - goimports
-    - golint
+    # - golint
     - gosec
     - gosimple
     - govet
     - ineffassign
-    - interfacer
+    # - interfacer
     # - lll
     - misspell
     - nakedret
-    - scopelint
+    # - scopelint
     - staticcheck
-    - structcheck
+    # - structcheck
     - stylecheck
     - typecheck
     # - unconvert
     - unparam
     # - unused
-    - varcheck
+    # - varcheck
     - whitespace
 issues:
   exclude-use-default: false
