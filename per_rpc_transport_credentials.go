@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !windows
 // +build !windows
 
 package grpcfd
@@ -195,7 +196,8 @@ func PerRPCCredentialsFromCallOptions(opts ...grpc.CallOption) credentials.PerRP
 }
 
 // FromPerRPCCredentials - return grpcfd.FDTransceiver from credentials.PerRPCCredentials
-//                         ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromPerRPCCredentials(rpcCredentials credentials.PerRPCCredentials) (transceiver FDTransceiver, ok bool) {
 	if transceiver, ok = rpcCredentials.(FDTransceiver); ok {
 		return transceiver, true

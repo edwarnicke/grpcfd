@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !windows
 // +build !windows
 
 package grpcfd
@@ -90,6 +91,7 @@ func (c *wrapTransportCredentials) Info() credentials.ProtocolInfo {
 	return c.TransportCredentials.Info()
 }
 
+// nolint: staticcheck
 func (c *wrapTransportCredentials) OverrideServerName(s string) error {
 	if c.TransportCredentials == nil {
 		return nil
