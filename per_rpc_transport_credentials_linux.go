@@ -20,12 +20,13 @@
 package grpcfd
 
 import (
+	"context"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
 
-func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
+func (w *wrapPerRPCCredentials) SendFilename(ctx context.Context, filename string) <-chan error {
 	out := make(chan error, 1)
 	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
 	if err != nil {
@@ -38,14 +39,14 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 			go func(in <-chan error, out chan<- error, file *os.File) {
 				joinErrChs(in, out)
 				_ = file.Close()
-			}(w.FDTransceiver.SendFile(file), out, file)
+			}(w.FDTransceiver.SendFile(ctx, file), out, file)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go func(in <-chan error, out chan<- error, file *os.File) {
 				joinErrChs(in, out)
 				_ = file.Close()
-			}(transceiver.SendFile(file), out, file)
+			}(transceiver.SendFile(ctx, file), out, file)
 		})
 	})
 	return out
