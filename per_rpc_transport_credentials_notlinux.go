@@ -14,13 +14,17 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+//go:build !linux && !windows
 // +build !linux,!windows
 
 package grpcfd
 
-import "os"
+import (
+	"context"
+	"os"
+)
 
-func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
+func (w *wrapPerRPCCredentials) SendFilename(ctx context.Context, filename string) <-chan error {
 	out := make(chan error, 1)
 	// Note: this will fail in most cases for 'unopenable' files (like unix file sockets).  See use of O_PATH in per_rpc_transport_credentials_linux.go for
 	// the trick that makes this work in Linux
@@ -35,14 +39,14 @@ func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
 			go func(in <-chan error, out chan<- error, file *os.File) {
 				joinErrChs(in, out)
 				_ = file.Close()
-			}(w.FDTransceiver.SendFile(file), out, file)
+			}(w.FDTransceiver.SendFile(ctx, file), out, file)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
 			go func(in <-chan error, out chan<- error, file *os.File) {
 				joinErrChs(in, out)
 				_ = file.Close()
-			}(transceiver.SendFile(file), out, file)
+			}(transceiver.SendFile(ctx, file), out, file)
 		})
 	})
 	return out

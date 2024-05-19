@@ -61,63 +61,63 @@ func (w *wrapPerRPCCredentials) RequireTransportSecurity() bool {
 	return false
 }
 
-func (w *wrapPerRPCCredentials) SendFD(fd uintptr) <-chan error {
+func (w *wrapPerRPCCredentials) SendFD(ctx context.Context, fd uintptr) <-chan error {
 	out := make(chan error, 1)
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			go joinErrChs(w.FDTransceiver.SendFD(fd), out)
+			go joinErrChs(w.FDTransceiver.SendFD(ctx, fd), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go joinErrChs(transceiver.SendFD(fd), out)
+			go joinErrChs(transceiver.SendFD(ctx, fd), out)
 		})
 	})
 	return out
 }
 
-func (w *wrapPerRPCCredentials) SendFile(file SyscallConn) <-chan error {
+func (w *wrapPerRPCCredentials) SendFile(ctx context.Context, file SyscallConn) <-chan error {
 	out := make(chan error, 1)
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			go joinErrChs(w.FDTransceiver.SendFile(file), out)
+			go joinErrChs(w.FDTransceiver.SendFile(ctx, file), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go joinErrChs(transceiver.SendFile(file), out)
+			go joinErrChs(transceiver.SendFile(ctx, file), out)
 		})
 	})
 	return out
 }
 
-func (w *wrapPerRPCCredentials) RecvFD(dev, inode uint64) <-chan uintptr {
+func (w *wrapPerRPCCredentials) RecvFD(ctx context.Context, dev, inode uint64) <-chan uintptr {
 	out := make(chan uintptr, 1)
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			go joinFDChs(w.FDTransceiver.RecvFD(dev, inode), out)
+			go joinFDChs(w.FDTransceiver.RecvFD(ctx, dev, inode), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go joinFDChs(transceiver.RecvFD(dev, inode), out)
+			go joinFDChs(transceiver.RecvFD(ctx, dev, inode), out)
 		})
 	})
 	return out
 }
 
-func (w *wrapPerRPCCredentials) RecvFile(dev, ino uint64) <-chan *os.File {
+func (w *wrapPerRPCCredentials) RecvFile(ctx context.Context, dev, ino uint64) <-chan *os.File {
 	out := make(chan *os.File, 1)
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			go joinFileChs(w.FDTransceiver.RecvFile(dev, ino), out)
+			go joinFileChs(w.FDTransceiver.RecvFile(ctx, dev, ino), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go joinFileChs(transceiver.RecvFile(dev, ino), out)
+			go joinFileChs(transceiver.RecvFile(ctx, dev, ino), out)
 		})
 	})
 	return out
 }
 
-func (w *wrapPerRPCCredentials) RecvFileByURL(urlStr string) (<-chan *os.File, error) {
+func (w *wrapPerRPCCredentials) RecvFileByURL(ctx context.Context, urlStr string) (<-chan *os.File, error) {
 	dev, ino, err := URLStringToDevIno(urlStr)
 	if err != nil {
 		return nil, err
@@ -125,17 +125,17 @@ func (w *wrapPerRPCCredentials) RecvFileByURL(urlStr string) (<-chan *os.File, e
 	out := make(chan *os.File, 1)
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			go joinFileChs(w.FDTransceiver.RecvFile(dev, ino), out)
+			go joinFileChs(w.FDTransceiver.RecvFile(ctx, dev, ino), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go joinFileChs(transceiver.RecvFile(dev, ino), out)
+			go joinFileChs(transceiver.RecvFile(ctx, dev, ino), out)
 		})
 	})
 	return out, nil
 }
 
-func (w *wrapPerRPCCredentials) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
+func (w *wrapPerRPCCredentials) RecvFDByURL(ctx context.Context, urlStr string) (<-chan uintptr, error) {
 	dev, ino, err := URLStringToDevIno(urlStr)
 	if err != nil {
 		return nil, err
@@ -143,11 +143,11 @@ func (w *wrapPerRPCCredentials) RecvFDByURL(urlStr string) (<-chan uintptr, erro
 	out := make(chan uintptr, 1)
 	w.executor.AsyncExec(func() {
 		if w.FDTransceiver != nil {
-			go joinFDChs(w.FDTransceiver.RecvFD(dev, ino), out)
+			go joinFDChs(w.FDTransceiver.RecvFD(ctx, dev, ino), out)
 			return
 		}
 		w.transceiverFuncs = append(w.transceiverFuncs, func(transceiver FDTransceiver) {
-			go joinFDChs(transceiver.RecvFD(dev, ino), out)
+			go joinFDChs(transceiver.RecvFD(ctx, dev, ino), out)
 		})
 	})
 	return out, nil

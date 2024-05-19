@@ -43,17 +43,17 @@ type SyscallConn interface {
 
 // FDSender - capable of Sending a file
 type FDSender interface {
-	SendFD(fd uintptr) <-chan error
-	SendFile(file SyscallConn) <-chan error
-	SendFilename(filename string) <-chan error
+	SendFD(ctx context.Context, fd uintptr) <-chan error
+	SendFile(ctx context.Context, file SyscallConn) <-chan error
+	SendFilename(ctx context.Context, filename string) <-chan error
 }
 
 // FDRecver - capable of Recving an fd by (dev,ino)
 type FDRecver interface {
-	RecvFD(dev, inode uint64) <-chan uintptr
-	RecvFile(dev, ino uint64) <-chan *os.File
-	RecvFileByURL(urlStr string) (<-chan *os.File, error)
-	RecvFDByURL(urlStr string) (<-chan uintptr, error)
+	RecvFD(ctx context.Context, dev, inode uint64) <-chan uintptr
+	RecvFile(ctx context.Context, dev, ino uint64) <-chan *os.File
+	RecvFileByURL(ctx context.Context, urlStr string) (<-chan *os.File, error)
+	RecvFDByURL(ctx context.Context, urlStr string) (<-chan uintptr, error)
 }
 
 // FDTransceiver - combination of FDSender  and FDRecver
