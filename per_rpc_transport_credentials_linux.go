@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+//go:build linux
 // +build linux
 
 package grpcfd
@@ -25,7 +26,7 @@ import (
 )
 
 func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
-	out := make(chan error, 1)
+	out := make(chan error, 50)
 	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
 	if err != nil {
 		out <- err

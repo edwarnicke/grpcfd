@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+//go:build !linux && !windows
 // +build !linux,!windows
 
 package grpcfd
@@ -21,7 +22,7 @@ package grpcfd
 import "os"
 
 func (w *wrapPerRPCCredentials) SendFilename(filename string) <-chan error {
-	out := make(chan error, 1)
+	out := make(chan error, 50)
 	// Note: this will fail in most cases for 'unopenable' files (like unix file sockets).  See use of O_PATH in per_rpc_transport_credentials_linux.go for
 	// the trick that makes this work in Linux
 	file, err := os.Open(filename) // #nosec
