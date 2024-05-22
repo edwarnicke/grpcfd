@@ -1,4 +1,4 @@
-module github.com/edwarnicke/grpcfd
+module github.com/denis-tingaikin/grpcfd
 
 go 1.14
 
