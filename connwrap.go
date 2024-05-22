@@ -173,9 +173,9 @@ func (w *connWrap) Write(b []byte) (int, error) {
 }
 
 func (w *connWrap) SendFD(fd uintptr) <-chan error {
-	log.Default().Panicln("grpcfd: SendFD start: " + fmt.Sprint(goid()))
+	log.Default().Println("grpcfd: SendFD start: " + fmt.Sprint(goid()))
 	debug.PrintStack()
-	defer log.Default().Panicln("grpcfd: SendFD end: " + fmt.Sprint(goid()))
+	defer log.Default().Println("grpcfd: SendFD end: " + fmt.Sprint(goid()))
 
 	errCh := make(chan error, 10)
 	// Dup the fd because we have no way of knowing what the caller will do with it between
@@ -194,9 +194,9 @@ func (w *connWrap) SendFD(fd uintptr) <-chan error {
 }
 
 func (w *connWrap) SendFile(file SyscallConn) <-chan error {
-	log.Default().Panicln("grpcfd: SendFile goroutine start: " + fmt.Sprint(goid()))
+	log.Default().Println("grpcfd: SendFile start: " + fmt.Sprint(goid()))
 	debug.PrintStack()
-	defer log.Default().Panicln("grpcfd: SendFile: " + fmt.Sprint(goid()))
+	defer log.Default().Println("grpcfd: SendFile end: " + fmt.Sprint(goid()))
 
 	errCh := make(chan error, 10)
 	raw, err := file.SyscallConn()
