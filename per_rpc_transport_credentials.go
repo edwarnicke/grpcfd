@@ -21,6 +21,8 @@ package grpcfd
 
 import (
 	context "context"
+	"fmt"
+	"log"
 	"os"
 
 	"github.com/edwarnicke/serialize"
@@ -154,6 +156,8 @@ func (w *wrapPerRPCCredentials) RecvFDByURL(urlStr string) (<-chan uintptr, erro
 }
 
 func joinErrChs(in <-chan error, out chan<- error) {
+	log.Default().Panicln("grpcfd: joinErrChs start: " + fmt.Sprint(goid()))
+	defer log.Default().Panicln("grpcfd: joinErrChs end: " + fmt.Sprint(goid()))
 	for err := range in {
 		out <- err
 	}
@@ -161,6 +165,8 @@ func joinErrChs(in <-chan error, out chan<- error) {
 }
 
 func joinFileChs(in <-chan *os.File, out chan<- *os.File) {
+	log.Default().Panicln("grpcfd: joinFileChs start: " + fmt.Sprint(goid()))
+	defer log.Default().Panicln("grpcfd: joinFileChs end: " + fmt.Sprint(goid()))
 	for file := range in {
 		out <- file
 	}
@@ -168,6 +174,9 @@ func joinFileChs(in <-chan *os.File, out chan<- *os.File) {
 }
 
 func joinFDChs(in <-chan uintptr, out chan<- uintptr) {
+	log.Default().Panicln("grpcfd: joinFDChs start: " + fmt.Sprint(goid()))
+	defer log.Default().Panicln("grpcfd: joinFDChs end: " + fmt.Sprint(goid()))
+
 	for fd := range in {
 		out <- fd
 	}

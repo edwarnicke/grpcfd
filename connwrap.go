@@ -22,9 +22,11 @@ package grpcfd
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/edwarnicke/serialize"
@@ -171,6 +173,10 @@ func (w *connWrap) Write(b []byte) (int, error) {
 }
 
 func (w *connWrap) SendFD(fd uintptr) <-chan error {
+	log.Default().Panicln("grpcfd: SendFD start: " + fmt.Sprint(goid()))
+	debug.PrintStack()
+	defer log.Default().Panicln("grpcfd: SendFD end: " + fmt.Sprint(goid()))
+
 	errCh := make(chan error, 10)
 	// Dup the fd because we have no way of knowing what the caller will do with it between
 	// now and when we can send it
@@ -188,6 +194,10 @@ func (w *connWrap) SendFD(fd uintptr) <-chan error {
 }
 
 func (w *connWrap) SendFile(file SyscallConn) <-chan error {
+	log.Default().Panicln("grpcfd: SendFile goroutine start: " + fmt.Sprint(goid()))
+	debug.PrintStack()
+	defer log.Default().Panicln("grpcfd: SendFile: " + fmt.Sprint(goid()))
+
 	errCh := make(chan error, 10)
 	raw, err := file.SyscallConn()
 	if err != nil {
