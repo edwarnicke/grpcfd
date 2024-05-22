@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+//go:build !linux && !windows
 // +build !linux,!windows
 
 package grpcfd
@@ -23,7 +24,7 @@ import (
 )
 
 func (w *connWrap) SendFilename(filename string) <-chan error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 10)
 	// Note: this will fail in most cases for 'unopenable' files (like unix file sockets).  See use of O_PATH in connwrap_linux.go for
 	// the trick that makes this work in Linux
 	file, err := os.Open(filename) // #nosec
@@ -33,15 +34,8 @@ func (w *connWrap) SendFilename(filename string) <-chan error {
 		return errCh
 	}
 	go func(errChIn <-chan error, errChOut chan<- error) {
-		for err := range errChIn {
-			errChOut <- err
-		}
-		err := file.Close()
-		if err != nil {
-			errChOut <- err
-		}
-		close(errChOut)
+		joinErrChs(errChIn, errChOut)
+		_ = file.Close()
 	}(w.SendFile(file), errCh)
-	_ = file.Close()
 	return errCh
 }

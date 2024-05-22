@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !windows
 // +build !windows
 
 package grpcfd
@@ -170,7 +171,7 @@ func (w *connWrap) Write(b []byte) (int, error) {
 }
 
 func (w *connWrap) SendFD(fd uintptr) <-chan error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 10)
 	// Dup the fd because we have no way of knowing what the caller will do with it between
 	// now and when we can send it
 	fd, _, err := syscall.Syscall(syscall.SYS_FCNTL, fd, uintptr(syscall.F_DUPFD), 0)
@@ -187,7 +188,7 @@ func (w *connWrap) SendFD(fd uintptr) <-chan error {
 }
 
 func (w *connWrap) SendFile(file SyscallConn) <-chan error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 10)
 	raw, err := file.SyscallConn()
 	if err != nil {
 		errCh <- errors.Wrapf(err, "unable to retrieve syscall.RawConn for src %+v", file)
@@ -202,16 +203,17 @@ func (w *connWrap) SendFile(file SyscallConn) <-chan error {
 			close(errCh)
 			return
 		}
-		go func(errChIn <-chan error, errChOut chan<- error) {
-			for err := range errChIn {
-				errChOut <- err
-			}
-			close(errChOut)
-		}(w.SendFD(fd), errCh)
+		go joinErrChs(w.SendFD(fd), errCh)
 	})
+
 	if err != nil {
-		errCh <- err
-		close(errCh)
+		// Return a separate channel to not conflict with goroutine from the raw.Control
+		// As an alternative, mutex can be used, but it can affect performance.
+		//
+		// In some cases, errCh can't be closed, but it's fine. https://groups.google.com/g/golang-nuts/c/pZwdYRGxCIk/m/qpbHxRRPJdUJ
+		var resCh = make(chan error, 1)
+		resCh <- err
+		return resCh
 	}
 	return errCh
 }
@@ -229,7 +231,7 @@ func (w *connWrap) String() string {
 }
 
 func (w *connWrap) RecvFD(dev, ino uint64) <-chan uintptr {
-	fdCh := make(chan uintptr, 1)
+	fdCh := make(chan uintptr, 10)
 	w.recvExecutor.AsyncExec(func() {
 		key := inodeKey{
 			dev: dev,
@@ -266,7 +268,7 @@ func (w *connWrap) RecvFDByURL(urlStr string) (<-chan uintptr, error) {
 }
 
 func (w *connWrap) RecvFile(dev, ino uint64) <-chan *os.File {
-	fileCh := make(chan *os.File, 1)
+	fileCh := make(chan *os.File, 10)
 	go func(fdCh <-chan uintptr, fileCh chan<- *os.File) {
 		for fd := range fdCh {
 			if runtime.GOOS == "linux" {
@@ -352,14 +354,16 @@ func (w *connWrap) Read(b []byte) (n int, err error) {
 }
 
 // FromPeer - return grpcfd.FDTransceiver from peer.Peer
-//            ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromPeer(p *peer.Peer) (transceiver FDTransceiver, ok bool) {
 	transceiver, ok = p.Addr.(FDTransceiver)
 	return transceiver, ok
 }
 
 // FromContext - return grpcfd.FDTransceiver from context.Context
-//               ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromContext(ctx context.Context) (transceiver FDTransceiver, ok bool) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
