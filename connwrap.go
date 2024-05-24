@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !windows
 // +build !windows
 
 package grpcfd
@@ -72,6 +73,7 @@ type connWrap struct {
 	sendFDs      []int
 	errChs       []chan error
 	sendExecutor serialize.Executor
+	closed       bool
 
 	recvFDChans  map[inodeKey][]chan uintptr
 	recvedFDs    map[inodeKey]uintptr
@@ -126,6 +128,7 @@ func (w *connWrap) close() error {
 			w.sendFDs = nil
 			w.errChs = nil
 		})
+		w.closed = true
 	})
 	return err
 }
@@ -180,6 +183,10 @@ func (w *connWrap) SendFD(fd uintptr) <-chan error {
 		return errCh
 	}
 	w.sendExecutor.AsyncExec(func() {
+		if w.closed {
+			close(errCh)
+			return
+		}
 		w.sendFDs = append(w.sendFDs, int(fd))
 		w.errChs = append(w.errChs, errCh)
 	})
@@ -231,6 +238,10 @@ func (w *connWrap) String() string {
 func (w *connWrap) RecvFD(dev, ino uint64) <-chan uintptr {
 	fdCh := make(chan uintptr, 1)
 	w.recvExecutor.AsyncExec(func() {
+		if w.closed {
+			close(fdCh)
+			return
+		}
 		key := inodeKey{
 			dev: dev,
 			ino: ino,
@@ -352,14 +363,16 @@ func (w *connWrap) Read(b []byte) (n int, err error) {
 }
 
 // FromPeer - return grpcfd.FDTransceiver from peer.Peer
-//            ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromPeer(p *peer.Peer) (transceiver FDTransceiver, ok bool) {
 	transceiver, ok = p.Addr.(FDTransceiver)
 	return transceiver, ok
 }
 
 // FromContext - return grpcfd.FDTransceiver from context.Context
-//               ok is true of successful, false otherwise
+//
+//	ok is true of successful, false otherwise
 func FromContext(ctx context.Context) (transceiver FDTransceiver, ok bool) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
