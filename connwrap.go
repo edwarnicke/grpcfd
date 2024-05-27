@@ -73,6 +73,7 @@ type connWrap struct {
 	sendFDs      []int
 	errChs       []chan error
 	sendExecutor serialize.Executor
+	closed       bool
 
 	recvFDChans  map[inodeKey][]chan uintptr
 	recvedFDs    map[inodeKey]uintptr
@@ -127,6 +128,7 @@ func (w *connWrap) close() error {
 			w.sendFDs = nil
 			w.errChs = nil
 		})
+		w.closed = true
 	})
 	return err
 }
@@ -181,6 +183,10 @@ func (w *connWrap) SendFD(fd uintptr) <-chan error {
 		return errCh
 	}
 	w.sendExecutor.AsyncExec(func() {
+		if w.closed {
+			close(errCh)
+			return
+		}
 		w.sendFDs = append(w.sendFDs, int(fd))
 		w.errChs = append(w.errChs, errCh)
 	})
@@ -232,6 +238,10 @@ func (w *connWrap) String() string {
 func (w *connWrap) RecvFD(dev, ino uint64) <-chan uintptr {
 	fdCh := make(chan uintptr, 1)
 	w.recvExecutor.AsyncExec(func() {
+		if w.closed {
+			close(fdCh)
+			return
+		}
 		key := inodeKey{
 			dev: dev,
 			ino: ino,
