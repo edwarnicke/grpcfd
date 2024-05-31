@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package test_proto;
+option go_package = "github.com/edwarnicke/grpcfd/test/proto";
+
+message FD {
+    string name = 1;
+}
+
+service FDService {
+    rpc ServerReceive (FD) returns (FD);
+    rpc ServerSend (FD) returns (FD);
+}
