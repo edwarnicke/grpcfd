@@ -20,13 +20,18 @@
 package grpcfd
 
 import (
+	"fmt"
+	"log"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
 
 func (w *connWrap) SendFilename(filename string) <-chan error {
-	errCh := make(chan error, 1)
+	log.Default().Println("grpcfd: SendFilename start" + fmt.Sprint(goid()))
+	defer log.Default().Println("grpcfd: SendFilename end" + fmt.Sprint(goid()))
+
+	errCh := make(chan error, 10)
 	file, err := os.OpenFile(filename, unix.O_PATH, 0) // #nosec
 	if err != nil {
 		errCh <- err
@@ -34,15 +39,10 @@ func (w *connWrap) SendFilename(filename string) <-chan error {
 		return errCh
 	}
 	go func(errChIn <-chan error, errChOut chan<- error) {
-		for err := range errChIn {
-			errChOut <- err
-		}
-		err := file.Close()
-		if err != nil {
-			errChOut <- err
-		}
-		close(errChOut)
+		log.Default().Println("grpcfd: SendFilename goroutine start: " + fmt.Sprint(goid()))
+		defer log.Default().Println("grpcfd: SendFilename end: " + fmt.Sprint(goid()))
+		joinErrChs(errChIn, errChOut)
+		_ = file.Close()
 	}(w.SendFile(file), errCh)
-	_ = file.Close()
 	return errCh
 }
